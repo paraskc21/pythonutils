@@ -61,253 +61,118 @@
   </body>
 
   <script type="text/javascript">
-  
-  const PAGE_DATA = {{ housedata | tojson }};
-  
-  console.log('Total flights loaded:', PAGE_DATA.features.length);
 
-  // Extract time range from all flights
-  let minTime = Infinity;
-  let maxTime = -Infinity;
-  
-  PAGE_DATA.features.forEach(feature => {
-    if (feature.properties && feature.properties.startTime) {
-      minTime = Math.min(minTime, feature.properties.startTime);
-      maxTime = Math.max(maxTime, feature.properties.endTime);
-    }
-  });
-
-  console.log('Time range:', new Date(minTime), 'to', new Date(maxTime));
-
-  // Calculate total 10-minute intervals in the time range
+  // We'll request time range and per-step positions from the backend
   const TEN_MINUTES_MS = 1000 * 60 * 10;
-  const totalTenMinSteps = Math.floor((maxTime - minTime) / TEN_MINUTES_MS);
-  const ONE_HOUR_MS = 1000 * 60 * 60;
-
-  // State
-  let currentSliderTime = minTime;
+  let minTime = null;
+  let maxTime = null;
+  let totalTenMinSteps = 0;
   let isPlaying = false;
-  let animationSpeed = 1; // Multiplier for animation speed
+  let animationSpeed = 1;
 
-  // Initialize slider max value
   const timeSlider = document.getElementById('timeSlider');
   const playPauseBtn = document.getElementById('playPauseBtn');
-  timeSlider.max = totalTenMinSteps;
 
-  // Set initial date range display
-  const startDate = new Date(minTime).toLocaleDateString();
-  const endDate = new Date(maxTime).toLocaleDateString();
-  document.getElementById('dateRange').textContent = startDate + ' → ' + endDate;
-  document.getElementById('currentDate').textContent = startDate;
-
-  // Function to interpolate position along a path
-  function getPositionAlongPath(coordinates, progress) {
-    if (coordinates.length < 2) return coordinates[0];
-    
-    const targetIndex = Math.ceil(progress * (coordinates.length - 1));
-    const currentIndex = Math.min(targetIndex, coordinates.length - 1);
-    
-    if (currentIndex === 0) return coordinates[0];
-    if (currentIndex >= coordinates.length - 1) return coordinates[coordinates.length - 1];
-    
-    // Linear interpolation between two points
-    const from = coordinates[currentIndex - 1];
-    const to = coordinates[currentIndex];
-    const segmentProgress = (progress * (coordinates.length - 1)) % 1;
-    
-    return [
-      from[0] + (to[0] - from[0]) * segmentProgress,
-      from[1] + (to[1] - from[1]) * segmentProgress,
-      from[2] + (to[2] - from[2]) * segmentProgress
-    ];
+  async function fetchTimeRange() {
+    const res = await fetch('/api/time_range');
+    if (!res.ok) throw new Error('time range fetch failed');
+    const json = await res.json();
+    minTime = json.minTime;
+    maxTime = json.maxTime;
+    totalTenMinSteps = json.tenMinSteps;
+    timeSlider.max = totalTenMinSteps;
+    const startDate = new Date(minTime).toLocaleDateString();
+    const endDate = new Date(maxTime).toLocaleDateString();
+    document.getElementById('dateRange').textContent = startDate + ' → ' + endDate;
+    document.getElementById('currentDate').textContent = startDate;
   }
 
-  // Function to calculate bearing (rotation) between two points
-  function getBearing(from, to) {
-    const lat1 = from[1] * Math.PI / 180;
-    const lat2 = to[1] * Math.PI / 180;
-    const lon1 = from[0] * Math.PI / 180;
-    const lon2 = to[0] * Math.PI / 180;
-    
-    const dLon = lon2 - lon1;
-    const y = Math.sin(dLon) * Math.cos(lat2);
-    const x = Math.cos(lat1) * Math.sin(lat2) - Math.sin(lat1) * Math.cos(lat2) * Math.cos(dLon);
-    
-    return (Math.atan2(y, x) * 180 / Math.PI + 360) % 360;
-  }
-
-  // Function to animate coordinates along a path based on progress (0-1)
-  function animateCoordinates(coordinates, progress) {
-    if (coordinates.length < 2) return coordinates;
-    const targetIndex = Math.ceil(progress * (coordinates.length - 1));
-    return coordinates.slice(0, Math.min(targetIndex + 1, coordinates.length));
-  }
-
-  // Function to get animated layer based on current time
-  function getAnimatedFlightsLayer() {
-    const planePositions = PAGE_DATA.features
-      .filter(feature => {
-        const startTime = feature.properties.startTime;
-        const endTime = feature.properties.endTime;
-        // Only show flights that are currently in progress
-        return startTime <= currentSliderTime && currentSliderTime <= endTime;
-      })
-      .map(feature => {
-        const startTime = feature.properties.startTime;
-        const endTime = feature.properties.endTime;
-        const duration = endTime - startTime;
-        const elapsed = currentSliderTime - startTime;
-        const progress = Math.min(1, Math.max(0, elapsed / duration));
-
-        // Get current position along the path
-        const position = getPositionAlongPath(feature.geometry.coordinates, progress);
-        
-        // Calculate bearing for rotation
-        let bearing = 0;
-        if (feature.geometry.coordinates.length > 1) {
-          const nextIndex = Math.min(
-            Math.ceil(progress * (feature.geometry.coordinates.length - 1)) + 1,
-            feature.geometry.coordinates.length - 1
-          );
-          bearing = getBearing(position, feature.geometry.coordinates[nextIndex]);
-        }
-
-        return {
-          type: 'Feature',
-          geometry: {
-            type: 'Point',
-            coordinates: position
-          },
-          properties: {
-            ...feature.properties,
-            bearing: bearing,
-            progress: progress
-          }
-        };
-      });
-
+  // build icon layer from features (point features returned by API)
+  function buildIconLayer(data) {
     return new deck.IconLayer({
       id: 'plane-icons',
-      data: planePositions,
+      data: data.features,
       iconAtlas: '/static/images/plane.svg',
-      iconMapping: {
-        marker: { x: 0, y: 0, width: 64, height: 64, mask: true }
-      },
+      iconMapping: { marker: { x: 0, y: 0, width: 64, height: 64, mask: true } },
       getIcon: d => 'marker',
-      getSize: d => 40,
+      getSize: d => 28,
       getPosition: d => d.geometry.coordinates,
+      getAngle: d => (d.properties.bearing || 0) - 90,
       getColor: d => {
-        // Color based on progress through flight
-        const p = d.properties.progress;
-        if (p < 0.33) return [0, 170, 239]; // Blue
-        if (p < 0.67) return [100, 200, 100]; // Green
-        return [255, 100, 100]; // Red
+        const p = d.properties.progress || 0;
+        if (p < 0.33) return [0,170,239];
+        if (p < 0.67) return [100,200,100];
+        return [255,100,100];
       },
-      getAngle: d => d.properties.bearing - 90,
       pickable: true,
-      autoHighlight: true,
-      onClick: (info) => {
-        if (info.object) {
-          console.log('Flight:', info.object.properties);
-        }
+      onClick: info => {
+        if (info.object) console.log(info.object.properties);
       }
     });
   }
 
+  // deck init with empty layer
   const deckgl = new deck.DeckGL({
     container: 'container',
     mapboxApiAccessToken: '<your mapbox token>',
-    mapStyle: "https://basemaps.cartocdn.com/gl/dark-matter-gl-style/style.json",
-    initialViewState: {
-      latitude: 51,
-      longitude: 10,
-      zoom: 3,
-      bearing: 0,
-      pitch: 30,
-    },
+    mapStyle: 'https://basemaps.cartocdn.com/gl/dark-matter-gl-style/style.json',
+    initialViewState: { latitude: 51, longitude: 10, zoom: 3, bearing: 0, pitch: 30 },
     controller: true,
-    layers: [getAnimatedFlightsLayer()],
-    getTooltip: ({object}) =>
-      object && {
-        html: `
-          <div style="font-size: 12px;">
-            <b>Flight: ${object.properties.flightNumber}</b><br/>
-            From: ${object.properties.originName}<br/>
-            To: ${object.properties.destinationName}<br/>
-            Aircraft: ${object.properties.aircraft}
-          </div>
-        `,
-        style: {
-          backgroundColor: '#111',
-          color: 'white',
-          padding: '8px'
-        }
-      }
+    layers: [],
   });
 
-  // Handle slider changes
-  timeSlider.addEventListener('input', (e) => {
-    const tenMinSteps = parseFloat(e.target.value);
-    currentSliderTime = minTime + (tenMinSteps * TEN_MINUTES_MS);
+  async function fetchAndShow(step) {
+    const res = await fetch(`/api/positions?step=${step}`);
+    if (!res.ok) return;
+    const data = await res.json();
+    deckgl.setProps({ layers: [ buildIconLayer(data) ] });
+  }
 
-    // Update displays
-    const currentDate = new Date(currentSliderTime).toLocaleDateString();
-    const currentTime = new Date(currentSliderTime).toLocaleTimeString();
-    document.getElementById('currentDate').textContent = currentDate + ' ' + currentTime;
-    const totalMinutes = Math.floor((currentSliderTime - minTime) / (1000 * 60));
+  timeSlider.addEventListener('input', async (e) => {
+    const step = parseInt(e.target.value, 10);
+    const currentTime = minTime + step * TEN_MINUTES_MS;
+    document.getElementById('currentDate').textContent = new Date(currentTime).toLocaleString();
+    const totalMinutes = Math.floor((currentTime - minTime) / (1000*60));
     const hours = Math.floor(totalMinutes / 60);
     const minutes = totalMinutes % 60;
-    document.getElementById('progressText').textContent = `${hours}h ${minutes}m (${Math.round((tenMinSteps / totalTenMinSteps) * 100)}%)`;
-
-    // Update layer
-    deckgl.setProps({
-      layers: [getAnimatedFlightsLayer()]
-    });
+    document.getElementById('progressText').textContent = `${hours}h ${minutes}m (${Math.round((step/totalTenMinSteps)*100)}%)`;
+    await fetchAndShow(step);
   });
 
-  // Animation loop
+  // animation loop
   function animateTimeline() {
-    if (isPlaying) {
-      const currentStep = parseFloat(timeSlider.value);
-      const nextStep = currentStep + (1 * animationSpeed); // Advance by 1 step multiplied by speed
-      
-      if (nextStep <= totalTenMinSteps) {
-        timeSlider.value = nextStep;
-      } else {
-        timeSlider.value = 0; // Loop back to start
-      }
-      
-      // Trigger input event to update display and layer
+    if (isPlaying && minTime !== null) {
+      const current = parseFloat(timeSlider.value);
+      let next = current + (1 * animationSpeed);
+      if (next > totalTenMinSteps) next = 0;
+      timeSlider.value = next;
       timeSlider.dispatchEvent(new Event('input', { bubbles: true }));
     }
-    
     requestAnimationFrame(animateTimeline);
   }
   animateTimeline();
 
-  // Play/Pause button
   playPauseBtn.addEventListener('click', () => {
     isPlaying = !isPlaying;
     playPauseBtn.textContent = isPlaying ? 'Pause' : 'Play';
     playPauseBtn.style.background = isPlaying ? '#f44336' : '#4CAF50';
   });
 
-  // Speed buttons
+  // speed buttons
   document.querySelectorAll('.speed-btn').forEach(btn => {
     btn.addEventListener('click', (e) => {
-      // Remove active state from all buttons
-      document.querySelectorAll('.speed-btn').forEach(b => {
-        b.style.background = '#555';
-        b.style.fontWeight = 'normal';
-      });
-      
-      // Set active state on clicked button
-      e.target.style.background = '#4CAF50';
-      e.target.style.fontWeight = 'bold';
-      
-      // Update animation speed
+      document.querySelectorAll('.speed-btn').forEach(b => { b.style.background = '#555'; b.style.fontWeight = 'normal'; });
+      e.target.style.background = '#4CAF50'; e.target.style.fontWeight = 'bold';
       animationSpeed = parseFloat(e.target.getAttribute('data-speed'));
     });
   });
+
+  // initialize
+  fetchTimeRange().then(() => {
+    // show initial step 0
+    timeSlider.value = 0;
+    timeSlider.dispatchEvent(new Event('input', { bubbles: true }));
+  }).catch(err => console.error(err));
+
   </script>
 </html>
