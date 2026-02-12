@@ -1,0 +1,245 @@
+<html>
+  <head>
+    <!-- deck.gl standalone bundle -->
+    <script src="https://unpkg.com/deck.gl@^9.0.0-beta/dist.min.js"></script>
+
+    <!-- Mapbox dependencies -->
+    <script src="https://api.mapbox.com/mapbox-gl-js/v3.2.0/mapbox-gl.js"></script>
+    <link href="https://api.mapbox.com/mapbox-gl-js/v3.2.0/mapbox-gl.css" rel="stylesheet" />
+
+    <style type="text/css">
+      body {margin: 0; padding: 0;}
+      #container {width: 100vw; height: 100vh;}
+    </style>
+  </head>
+
+  <body>
+    <div id="container"></div>
+  </body>
+
+  <script type="text/javascript">
+  
+  // Might get IDE error, as IDEs don't understand jinja2
+  const PAGE_DATA = {{ housedata | tojson }};
+  
+  console.log('Total flights loaded:', PAGE_DATA.features.length);
+
+  // Extract time range from all flights
+  let minTime = Infinity;
+  let maxTime = -Infinity;
+  
+  PAGE_DATA.features.forEach(feature => {
+    if (feature.properties && feature.properties.startTime) {
+      minTime = Math.min(minTime, feature.properties.startTime);
+      maxTime = Math.max(maxTime, feature.properties.endTime);
+    }
+  });
+
+  // State
+  let currentSliderTime = minTime;
+
+  // Calculate total hours in the time range
+  const totalHours = Math.floor((maxTime - minTime) / (1000 * 60 * 60));
+  const ONE_HOUR_MS = 1000 * 60 * 60;
+
+  // Function to interpolate position along a path
+  function getPositionAlongPath(coordinates, progress) {
+    if (coordinates.length < 2) return coordinates[0];
+    
+    const targetIndex = Math.ceil(progress * (coordinates.length - 1));
+    const currentIndex = Math.min(targetIndex, coordinates.length - 1);
+    
+    if (currentIndex === 0) return coordinates[0];
+    if (currentIndex >= coordinates.length - 1) return coordinates[coordinates.length - 1];
+    
+    // Linear interpolation between two points
+    const from = coordinates[currentIndex - 1];
+    const to = coordinates[currentIndex];
+    const segmentProgress = (progress * (coordinates.length - 1)) % 1;
+    
+    return [
+      from[0] + (to[0] - from[0]) * segmentProgress,
+      from[1] + (to[1] - from[1]) * segmentProgress,
+      from[2] + (to[2] - from[2]) * segmentProgress
+    ];
+  }
+
+  // Function to calculate bearing (rotation) between two points
+  function getBearing(from, to) {
+    const lat1 = from[1] * Math.PI / 180;
+    const lat2 = to[1] * Math.PI / 180;
+    const lon1 = from[0] * Math.PI / 180;
+    const lon2 = to[0] * Math.PI / 180;
+    
+    const dLon = lon2 - lon1;
+    const y = Math.sin(dLon) * Math.cos(lat2);
+    const x = Math.cos(lat1) * Math.sin(lat2) - Math.sin(lat1) * Math.cos(lat2) * Math.cos(dLon);
+    
+    return (Math.atan2(y, x) * 180 / Math.PI + 360) % 360;
+  }
+
+  // Function to get animated layer based on current time
+  function getAnimatedFlightsLayer() {
+    const planePositions = PAGE_DATA.features
+      .filter(feature => {
+        const startTime = feature.properties.startTime;
+        const endTime = feature.properties.endTime;
+        // Only show flights that are currently in progress
+        return startTime <= currentSliderTime && currentSliderTime <= endTime;
+      })
+      .map(feature => {
+        const startTime = feature.properties.startTime;
+        const endTime = feature.properties.endTime;
+        const duration = endTime - startTime;
+        const elapsed = currentSliderTime - startTime;
+        const progress = Math.min(1, Math.max(0, elapsed / duration));
+
+        // Get current position along the path
+        const position = getPositionAlongPath(feature.geometry.coordinates, progress);
+        
+        // Calculate bearing for rotation
+        let bearing = 0;
+        if (feature.geometry.coordinates.length > 1) {
+          const nextIndex = Math.min(
+            Math.ceil(progress * (feature.geometry.coordinates.length - 1)) + 1,
+            feature.geometry.coordinates.length - 1
+          );
+          bearing = getBearing(position, feature.geometry.coordinates[nextIndex]);
+        }
+
+        return {
+          type: 'Feature',
+          geometry: {
+            type: 'Point',
+            coordinates: position
+          },
+          properties: {
+            ...feature.properties,
+            bearing: bearing,
+            progress: progress
+          }
+        };
+      });
+
+    return new deck.IconLayer({
+      id: 'plane-icons',
+      data: planePositions,
+      iconAtlas: 'data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iNjQiIGhlaWdodD0iNjQiIHZpZXdCb3g9IjAgMCA2NCA2NCIgZmlsbD0ibm9uZSIgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIj48Y2lyY2xlIGN4PSIzMiIgY3k9IjMyIiByPSIzMCIgZmlsbD0iIzAwYWFlZiIgc3Ryb2tlPSIjZmZmIiBzdHJva2Utd2lkdGg9IjIiLz48cG9seWdvbiBwb2ludHM9IjMyLDEwIDQyLDM0IDMyLDMwIDIyLDM0IiBmaWxsPSIjZmZmIi8+PC9zdmc+',
+      iconMapping: {
+        marker: { x: 0, y: 0, width: 64, height: 64, mask: false }
+      },
+      getIcon: d => 'marker',
+      getSize: d => 40,
+      getPosition: d => d.geometry.coordinates,
+      getColor: d => {
+        // Color based on progress through flight
+        const p = d.properties.progress;
+        if (p < 0.33) return [0, 170, 239]; // Blue
+        if (p < 0.67) return [100, 200, 100]; // Green
+        return [255, 100, 100]; // Red
+      },
+      getAngle: d => d.properties.bearing,
+      pickable: true,
+      autoHighlight: true,
+      onClick: (info) => {
+        if (info.object) {
+          console.log('Flight:', info.object.properties);
+        }
+      }
+    });
+  }
+
+  const deckgl = new deck.DeckGL({
+    container: 'container',
+    mapboxApiAccessToken: '<your mapbox token>',
+    mapStyle: "https://basemaps.cartocdn.com/gl/dark-matter-gl-style/style.json",
+    initialViewState: {
+      latitude: 51,
+      longitude: 10,
+      zoom: 3,
+      bearing: 0,
+      pitch: 30,
+    },
+    controller: true,
+    layers: [getAnimatedFlightsLayer()],
+    getTooltip: ({object}) =>
+      object && {
+        html: `
+          <div style="font-size: 12px;">
+            <b>Flight: ${object.properties.flightNumber}</b><br/>
+            From: ${object.properties.origin}<br/>
+            To: ${object.properties.destination}<br/>
+            Aircraft: ${object.properties.airplaneType}
+          </div>
+        `,
+        style: {
+          backgroundColor: '#111',
+          color: 'white',
+          padding: '8px'
+        }
+      }
+  });
+
+  // Create time slider UI
+  const controlsDiv = document.createElement('div');
+  controlsDiv.style.cssText = `
+    position: absolute;
+    bottom: 20px;
+    left: 20px;
+    right: 20px;
+    background: rgba(0, 0, 0, 0.8);
+    padding: 15px 20px;
+    border-radius: 8px;
+    color: white;
+    font-family: Arial, sans-serif;
+    z-index: 100;
+  `;
+
+  const startDate = new Date(minTime).toLocaleDateString();
+  const endDate = new Date(maxTime).toLocaleDateString();
+
+  controlsDiv.innerHTML = `
+    <div style="display: flex; align-items: center; gap: 15px;">
+      <div>
+        <small>10-Year Timeline</small><br/>
+        <small id="dateRange">${startDate} → ${endDate}</small>
+      </div>
+      <input 
+        type="range" 
+        id="timeSlider" 
+        min="0" 
+        max="${totalHours}" 
+        value="0"
+        step="1"
+        style="flex: 1; height: 6px; cursor: pointer;"
+      />
+      <div style="min-width: 200px;">
+        <small id="currentDate">${startDate}</small><br/>
+        <small id="progressText">0%</small>
+      </div>
+    </div>
+  `;
+  document.body.appendChild(controlsDiv);
+
+  // Handle slider changes
+  const timeSlider = document.getElementById('timeSlider');
+  const currentDateDisplay = document.getElementById('currentDate');
+  const progressDisplay = document.getElementById('progressText');
+
+  timeSlider.addEventListener('input', (e) => {
+    const hours = parseFloat(e.target.value);
+    currentSliderTime = minTime + (hours * ONE_HOUR_MS);
+
+    // Update displays
+    const currentDate = new Date(currentSliderTime).toLocaleDateString();
+    const currentTime = new Date(currentSliderTime).toLocaleTimeString();
+    currentDateDisplay.textContent = currentDate + ' ' + currentTime;
+    progressDisplay.textContent = hours + ' hours (' + Math.round((hours / totalHours) * 100) + '%)';
+
+    // Update layer
+    deckgl.setProps({
+      layers: [getAnimatedFlightsLayer()]
+    });
+  });
+  </script>
+</html>
