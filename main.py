@@ -11,19 +11,19 @@ app.mount("/static", StaticFiles(directory="static"), name="static")
 templates = Jinja2Templates(directory="templates")
  
 DATA_DIR = Path(__file__).parent / "dataset"
-China_Houses = DATA_DIR / "airplane_flights.geojson"
+Flights_Data = DATA_DIR / "airplane_flights_1day.geojson"
 
 
 def load_data():
-    global housedata
-    with open(China_Houses, "r") as f:
-        housedata = json.load(f)
+    global flightdata
+    with open(Flights_Data, "r") as f:
+        flightdata = json.load(f)
 
 load_data()
 
 @app.get('/')
 async def name(request: Request):
-    global housedata
-    with open(China_Houses, "r") as f:
-        housedata = json.load(f)
-        return templates.TemplateResponse("index.html", {"request": request, "housedata": housedata}) 
+    global flightdata
+    with open(Flights_Data, "r") as f:
+        flightdata = json.load(f)
+        return templates.TemplateResponse("index.html", {"request": request, "housedata": flightdata}) 

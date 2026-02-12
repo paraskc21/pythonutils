@@ -15,11 +15,53 @@
 
   <body>
     <div id="container"></div>
+    
+    <div id="timeline-controls" style="
+      position: absolute;
+      bottom: 20px;
+      left: 20px;
+      right: 20px;
+      background: rgba(0, 0, 0, 0.8);
+      padding: 15px 20px;
+      border-radius: 8px;
+      color: white;
+      font-family: Arial, sans-serif;
+      z-index: 100;
+    ">
+      <div style="display: flex; align-items: center; gap: 15px;">
+        <button id="playPauseBtn" style="padding: 8px 16px; background: #4CAF50; color: white; border: none; border-radius: 4px; cursor: pointer; font-weight: bold;">Play</button>
+        <div style="display: flex; gap: 5px; align-items: center;">
+          <small>Speed:</small>
+          <button class="speed-btn" data-speed="0.1" style="padding: 6px 10px; background: #555; color: white; border: 1px solid #999; border-radius: 4px; cursor: pointer; font-size: 12px;">0.1x</button>
+          <button class="speed-btn" data-speed="0.25" style="padding: 6px 10px; background: #555; color: white; border: 1px solid #999; border-radius: 4px; cursor: pointer; font-size: 12px;">0.25x</button>
+          <button class="speed-btn" data-speed="0.5" style="padding: 6px 10px; background: #555; color: white; border: 1px solid #999; border-radius: 4px; cursor: pointer; font-size: 12px;">0.5x</button>
+          <button class="speed-btn" data-speed="1" style="padding: 6px 10px; background: #4CAF50; color: white; border: 1px solid #999; border-radius: 4px; cursor: pointer; font-size: 12px; font-weight: bold;">1x</button>
+          <button class="speed-btn" data-speed="2" style="padding: 6px 10px; background: #555; color: white; border: 1px solid #999; border-radius: 4px; cursor: pointer; font-size: 12px;">2x</button>
+          <button class="speed-btn" data-speed="4" style="padding: 6px 10px; background: #555; color: white; border: 1px solid #999; border-radius: 4px; cursor: pointer; font-size: 12px;">4x</button>
+        </div>
+        <div>
+          <small>1-Day Timeline</small><br/>
+          <small id="dateRange"></small>
+        </div>
+        <input 
+          type="range" 
+          id="timeSlider" 
+          min="0" 
+          max="100"
+          value="0"
+          step="1"
+          style="flex: 1; height: 6px; cursor: pointer;"
+        />
+        <div style="min-width: 200px;">
+          <small id="currentDate"></small><br/>
+          <small id="progressText">0h 0m (0%)</small>
+        </div>
+      </div>
+    </div>
   </body>
 
   <script type="text/javascript">
   
-  // Might get IDE error, as IDEs don't understand jinja2
   const PAGE_DATA = {{ housedata | tojson }};
   
   console.log('Total flights loaded:', PAGE_DATA.features.length);
@@ -35,12 +77,28 @@
     }
   });
 
+  console.log('Time range:', new Date(minTime), 'to', new Date(maxTime));
+
+  // Calculate total 10-minute intervals in the time range
+  const TEN_MINUTES_MS = 1000 * 60 * 10;
+  const totalTenMinSteps = Math.floor((maxTime - minTime) / TEN_MINUTES_MS);
+  const ONE_HOUR_MS = 1000 * 60 * 60;
+
   // State
   let currentSliderTime = minTime;
+  let isPlaying = false;
+  let animationSpeed = 1; // Multiplier for animation speed
 
-  // Calculate total hours in the time range
-  const totalHours = Math.floor((maxTime - minTime) / (1000 * 60 * 60));
-  const ONE_HOUR_MS = 1000 * 60 * 60;
+  // Initialize slider max value
+  const timeSlider = document.getElementById('timeSlider');
+  const playPauseBtn = document.getElementById('playPauseBtn');
+  timeSlider.max = totalTenMinSteps;
+
+  // Set initial date range display
+  const startDate = new Date(minTime).toLocaleDateString();
+  const endDate = new Date(maxTime).toLocaleDateString();
+  document.getElementById('dateRange').textContent = startDate + ' → ' + endDate;
+  document.getElementById('currentDate').textContent = startDate;
 
   // Function to interpolate position along a path
   function getPositionAlongPath(coordinates, progress) {
@@ -76,6 +134,13 @@
     const x = Math.cos(lat1) * Math.sin(lat2) - Math.sin(lat1) * Math.cos(lat2) * Math.cos(dLon);
     
     return (Math.atan2(y, x) * 180 / Math.PI + 360) % 360;
+  }
+
+  // Function to animate coordinates along a path based on progress (0-1)
+  function animateCoordinates(coordinates, progress) {
+    if (coordinates.length < 2) return coordinates;
+    const targetIndex = Math.ceil(progress * (coordinates.length - 1));
+    return coordinates.slice(0, Math.min(targetIndex + 1, coordinates.length));
   }
 
   // Function to get animated layer based on current time
@@ -124,9 +189,9 @@
     return new deck.IconLayer({
       id: 'plane-icons',
       data: planePositions,
-      iconAtlas: 'data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iNjQiIGhlaWdodD0iNjQiIHZpZXdCb3g9IjAgMCA2NCA2NCIgZmlsbD0ibm9uZSIgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIj48Y2lyY2xlIGN4PSIzMiIgY3k9IjMyIiByPSIzMCIgZmlsbD0iIzAwYWFlZiIgc3Ryb2tlPSIjZmZmIiBzdHJva2Utd2lkdGg9IjIiLz48cG9seWdvbiBwb2ludHM9IjMyLDEwIDQyLDM0IDMyLDMwIDIyLDM0IiBmaWxsPSIjZmZmIi8+PC9zdmc+',
+      iconAtlas: '/static/images/plane.svg',
       iconMapping: {
-        marker: { x: 0, y: 0, width: 64, height: 64, mask: false }
+        marker: { x: 0, y: 0, width: 64, height: 64, mask: true }
       },
       getIcon: d => 'marker',
       getSize: d => 40,
@@ -138,7 +203,7 @@
         if (p < 0.67) return [100, 200, 100]; // Green
         return [255, 100, 100]; // Red
       },
-      getAngle: d => d.properties.bearing,
+      getAngle: d => d.properties.bearing - 90,
       pickable: true,
       autoHighlight: true,
       onClick: (info) => {
@@ -167,9 +232,9 @@
         html: `
           <div style="font-size: 12px;">
             <b>Flight: ${object.properties.flightNumber}</b><br/>
-            From: ${object.properties.origin}<br/>
-            To: ${object.properties.destination}<br/>
-            Aircraft: ${object.properties.airplaneType}
+            From: ${object.properties.originName}<br/>
+            To: ${object.properties.destinationName}<br/>
+            Aircraft: ${object.properties.aircraft}
           </div>
         `,
         style: {
@@ -180,65 +245,68 @@
       }
   });
 
-  // Create time slider UI
-  const controlsDiv = document.createElement('div');
-  controlsDiv.style.cssText = `
-    position: absolute;
-    bottom: 20px;
-    left: 20px;
-    right: 20px;
-    background: rgba(0, 0, 0, 0.8);
-    padding: 15px 20px;
-    border-radius: 8px;
-    color: white;
-    font-family: Arial, sans-serif;
-    z-index: 100;
-  `;
-
-  const startDate = new Date(minTime).toLocaleDateString();
-  const endDate = new Date(maxTime).toLocaleDateString();
-
-  controlsDiv.innerHTML = `
-    <div style="display: flex; align-items: center; gap: 15px;">
-      <div>
-        <small>10-Year Timeline</small><br/>
-        <small id="dateRange">${startDate} → ${endDate}</small>
-      </div>
-      <input 
-        type="range" 
-        id="timeSlider" 
-        min="0" 
-        max="${totalHours}" 
-        value="0"
-        step="1"
-        style="flex: 1; height: 6px; cursor: pointer;"
-      />
-      <div style="min-width: 200px;">
-        <small id="currentDate">${startDate}</small><br/>
-        <small id="progressText">0%</small>
-      </div>
-    </div>
-  `;
-  document.body.appendChild(controlsDiv);
-
   // Handle slider changes
-  const timeSlider = document.getElementById('timeSlider');
-  const currentDateDisplay = document.getElementById('currentDate');
-  const progressDisplay = document.getElementById('progressText');
-
   timeSlider.addEventListener('input', (e) => {
-    const hours = parseFloat(e.target.value);
-    currentSliderTime = minTime + (hours * ONE_HOUR_MS);
+    const tenMinSteps = parseFloat(e.target.value);
+    currentSliderTime = minTime + (tenMinSteps * TEN_MINUTES_MS);
 
     // Update displays
     const currentDate = new Date(currentSliderTime).toLocaleDateString();
     const currentTime = new Date(currentSliderTime).toLocaleTimeString();
-    currentDateDisplay.textContent = currentDate + ' ' + currentTime;
-    progressDisplay.textContent = hours + ' hours (' + Math.round((hours / totalHours) * 100) + '%)';
+    document.getElementById('currentDate').textContent = currentDate + ' ' + currentTime;
+    const totalMinutes = Math.floor((currentSliderTime - minTime) / (1000 * 60));
+    const hours = Math.floor(totalMinutes / 60);
+    const minutes = totalMinutes % 60;
+    document.getElementById('progressText').textContent = `${hours}h ${minutes}m (${Math.round((tenMinSteps / totalTenMinSteps) * 100)}%)`;
 
     // Update layer
     deckgl.setProps({
       layers: [getAnimatedFlightsLayer()]
+    });
+  });
+
+  // Animation loop
+  function animateTimeline() {
+    if (isPlaying) {
+      const currentStep = parseFloat(timeSlider.value);
+      const nextStep = currentStep + (1 * animationSpeed); // Advance by 1 step multiplied by speed
+      
+      if (nextStep <= totalTenMinSteps) {
+        timeSlider.value = nextStep;
+      } else {
+        timeSlider.value = 0; // Loop back to start
+      }
+      
+      // Trigger input event to update display and layer
+      timeSlider.dispatchEvent(new Event('input', { bubbles: true }));
+    }
+    
+    requestAnimationFrame(animateTimeline);
+  }
+  animateTimeline();
+
+  // Play/Pause button
+  playPauseBtn.addEventListener('click', () => {
+    isPlaying = !isPlaying;
+    playPauseBtn.textContent = isPlaying ? 'Pause' : 'Play';
+    playPauseBtn.style.background = isPlaying ? '#f44336' : '#4CAF50';
+  });
+
+  // Speed buttons
+  document.querySelectorAll('.speed-btn').forEach(btn => {
+    btn.addEventListener('click', (e) => {
+      // Remove active state from all buttons
+      document.querySelectorAll('.speed-btn').forEach(b => {
+        b.style.background = '#555';
+        b.style.fontWeight = 'normal';
+      });
+      
+      // Set active state on clicked button
+      e.target.style.background = '#4CAF50';
+      e.target.style.fontWeight = 'bold';
+      
+      // Update animation speed
+      animationSpeed = parseFloat(e.target.getAttribute('data-speed'));
     });
   });
   </script>
