@@ -69,23 +69,6 @@ def interpolate_position(coords, progress: float):
         alt = 0
     return [lon, lat, alt]
 
-def bearing_between(a, b):
-    # a and b are [lon, lat, ...]
-    import math
-    lon1, lat1 = a[0], a[1]
-    lon2, lat2 = b[0], b[1]
-    lat1 = math.radians(lat1)
-    lat2 = math.radians(lat2)
-    lon1 = math.radians(lon1)
-    lon2 = math.radians(lon2)
-    dLon = lon2 - lon1
-    y = math.sin(dLon) * math.cos(lat2)
-    x = math.cos(lat1) * math.sin(lat2) - math.sin(lat1) * math.cos(lat2) * math.cos(dLon)
-    brng = (math.degrees(math.atan2(y, x)) + 360) % 360
-    return brng
-
-
-@app.get('/api/time_range')
 async def api_time_range():
     tr = compute_time_range()
     if not tr:
@@ -99,7 +82,7 @@ async def api_positions(step: Optional[int] = Query(None), time_ms: Optional[int
     tr = compute_time_range()
     if not tr:
         return JSONResponse({"features": []})
-    min_t = tr['minTime']
+    min_t = tr['minTime'] 
     if step is not None:
         current_time = min_t + int(step) * TEN_MINUTES_MS
     elif time_ms is not None:
@@ -119,17 +102,17 @@ async def api_positions(step: Optional[int] = Query(None), time_ms: Optional[int
             elapsed = current_time - st
             progress = max(0.0, min(1.0, elapsed / duration)) if duration > 0 else 1.0
             pos = interpolate_position(feat['geometry']['coordinates'], progress)
-            # compute next point for bearing
+            # next point for client-side bearing (turf.js)
             n = len(feat['geometry']['coordinates'])
             target = progress * (n - 1)
             idx = int(floor(target))
             next_idx = min(idx + 1, n - 1)
             next_pt = feat['geometry']['coordinates'][next_idx]
-            br = bearing_between(pos, next_pt) if pos and next_pt else 0
+            next_position = [next_pt[0], next_pt[1]] if next_pt else None
             new_feat = {
                 "type": "Feature",
                 "geometry": {"type": "Point", "coordinates": pos},
-                "properties": {**props, "progress": progress, "bearing": br}
+                "properties": {**props, "progress": progress, "nextPosition": next_position}
             }
             features.append(new_feat)
 

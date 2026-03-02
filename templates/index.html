@@ -3,6 +3,8 @@
     <!-- deck.gl standalone bundle -->
     <script src="https://unpkg.com/deck.gl@^9.0.0-beta/dist.min.js"></script>
 
+    <!-- Turf.js for bearing calculation -->
+    <script src="https://cdn.jsdelivr.net/npm/@turf/turf@6.5.0/turf.min.js"></script>
     <!-- Mapbox dependencies -->
     <script src="https://api.mapbox.com/mapbox-gl-js/v3.2.0/mapbox-gl.js"></script>
     <link href="https://api.mapbox.com/mapbox-gl-js/v3.2.0/mapbox-gl.css" rel="stylesheet" />
@@ -29,16 +31,7 @@
       z-index: 100;
     ">
       <div style="display: flex; align-items: center; gap: 15px;">
-        <button id="playPauseBtn" style="padding: 8px 16px; background: #4CAF50; color: white; border: none; border-radius: 4px; cursor: pointer; font-weight: bold;">Play</button>
-        <div style="display: flex; gap: 5px; align-items: center;">
-          <small>Speed:</small>
-          <button class="speed-btn" data-speed="0.1" style="padding: 6px 10px; background: #555; color: white; border: 1px solid #999; border-radius: 4px; cursor: pointer; font-size: 12px;">0.1x</button>
-          <button class="speed-btn" data-speed="0.25" style="padding: 6px 10px; background: #555; color: white; border: 1px solid #999; border-radius: 4px; cursor: pointer; font-size: 12px;">0.25x</button>
-          <button class="speed-btn" data-speed="0.5" style="padding: 6px 10px; background: #555; color: white; border: 1px solid #999; border-radius: 4px; cursor: pointer; font-size: 12px;">0.5x</button>
-          <button class="speed-btn" data-speed="1" style="padding: 6px 10px; background: #4CAF50; color: white; border: 1px solid #999; border-radius: 4px; cursor: pointer; font-size: 12px; font-weight: bold;">1x</button>
-          <button class="speed-btn" data-speed="2" style="padding: 6px 10px; background: #555; color: white; border: 1px solid #999; border-radius: 4px; cursor: pointer; font-size: 12px;">2x</button>
-          <button class="speed-btn" data-speed="4" style="padding: 6px 10px; background: #555; color: white; border: 1px solid #999; border-radius: 4px; cursor: pointer; font-size: 12px;">4x</button>
-        </div>
+        <!-- Play/pause and speed controls removed per user request -->
         <div>
           <small>1-Day Timeline</small><br/>
           <small id="dateRange"></small>
@@ -67,11 +60,9 @@
   let minTime = null;
   let maxTime = null;
   let totalTenMinSteps = 0;
-  let isPlaying = false;
-  let animationSpeed = 1;
+  let sliderMax = 0; // will be set to limit timeline (first 2 hours)
 
   const timeSlider = document.getElementById('timeSlider');
-  const playPauseBtn = document.getElementById('playPauseBtn');
 
   async function fetchTimeRange() {
     const res = await fetch('/api/time_range');
@@ -80,7 +71,11 @@
     minTime = json.minTime;
     maxTime = json.maxTime;
     totalTenMinSteps = json.tenMinSteps;
-    timeSlider.max = totalTenMinSteps;
+    // limit the slider to the first 2 hours (2h = 120 minutes = 12 ten-minute steps)
+    const FIRST_TWO_HOURS_MINUTES = 120;
+    const firstTwoHoursSteps = Math.floor(FIRST_TWO_HOURS_MINUTES / 10);
+    sliderMax = Math.min(totalTenMinSteps, firstTwoHoursSteps);
+    timeSlider.max = sliderMax;
     const startDate = new Date(minTime).toLocaleDateString();
     const endDate = new Date(maxTime).toLocaleDateString();
     document.getElementById('dateRange').textContent = startDate + ' → ' + endDate;
@@ -93,23 +88,30 @@
       id: 'plane-icons',
       data: data.features,
       iconAtlas: '/static/images/plane.svg',
-      iconMapping: { marker: { x: 0, y: 0, width: 64, height: 64, mask: true } },
+      iconMapping: { marker: { x: 0, y: 0, width: 174, height: 174, mask: true } },
       getIcon: d => 'marker',
       getSize: d => 28,
       getPosition: d => d.geometry.coordinates,
-      getAngle: d => (d.properties.bearing || 0) - 90,
+      billboard: false,
+      getAngle: d => {
+        const nextPos = d.properties.nextPosition;
+        if (!nextPos || !d.geometry.coordinates) return 0;
+        const from = d.geometry.coordinates.slice(0, 2);
+        const bearing = turf.bearing(turf.point(from), turf.point(nextPos));
+        return (bearing - 90 + 360) % 360;
+      },
       getColor: d => {
-        const p = d.properties.progress || 0;
-        if (p < 0.33) return [0,170,239];
-        if (p < 0.67) return [100,200,100];
-        return [255,100,100];
+        // const p = d.properties.progress || 0;
+        // if (p < 0.33) return [0,170,239];
+        // if (p < 0.67) return [100,200,100];
+        // return [255,100,100];  
+        return [255,255,255]
       },
       pickable: true,
-      onClick: info => {
-        if (info.object) console.log(info.object.properties);
-      }
+      onClick: info => {}
     });
   }
+  
 
   // deck init with empty layer
   const deckgl = new deck.DeckGL({
@@ -135,37 +137,12 @@
     const totalMinutes = Math.floor((currentTime - minTime) / (1000*60));
     const hours = Math.floor(totalMinutes / 60);
     const minutes = totalMinutes % 60;
-    document.getElementById('progressText').textContent = `${hours}h ${minutes}m (${Math.round((step/totalTenMinSteps)*100)}%)`;
+    const denom = sliderMax > 0 ? sliderMax : Math.max(1, totalTenMinSteps);
+    document.getElementById('progressText').textContent = `${hours}h ${minutes}m (${Math.round((step/denom)*100)}%)`;
     await fetchAndShow(step);
   });
 
-  // animation loop
-  function animateTimeline() {
-    if (isPlaying && minTime !== null) {
-      const current = parseFloat(timeSlider.value);
-      let next = current + (1 * animationSpeed);
-      if (next > totalTenMinSteps) next = 0;
-      timeSlider.value = next;
-      timeSlider.dispatchEvent(new Event('input', { bubbles: true }));
-    }
-    requestAnimationFrame(animateTimeline);
-  }
-  animateTimeline();
-
-  playPauseBtn.addEventListener('click', () => {
-    isPlaying = !isPlaying;
-    playPauseBtn.textContent = isPlaying ? 'Pause' : 'Play';
-    playPauseBtn.style.background = isPlaying ? '#f44336' : '#4CAF50';
-  });
-
-  // speed buttons
-  document.querySelectorAll('.speed-btn').forEach(btn => {
-    btn.addEventListener('click', (e) => {
-      document.querySelectorAll('.speed-btn').forEach(b => { b.style.background = '#555'; b.style.fontWeight = 'normal'; });
-      e.target.style.background = '#4CAF50'; e.target.style.fontWeight = 'bold';
-      animationSpeed = parseFloat(e.target.getAttribute('data-speed'));
-    });
-  });
+  // Play/pause and speed controls removed — use manual slider only
 
   // initialize
   fetchTimeRange().then(() => {
